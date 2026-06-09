@@ -1,0 +1,175 @@
+---
+title: 'Tensor Products: Take I'
+description: 'Tensor products.'
+pubDate: 'Jun 05 2026'
+# heroImage: '../../assets/your-image.jpg'   # optional — uncomment and point to a file in src/assets/
+---
+
+This post collects some thoughts from my recent reading on what tensor
+products really are.
+
+A friend recently gifted me a book on *signature* methods and their
+applications in machine learning and finance [@bayer2025signature]; it
+is an excellent text to which he himself contributed.  A colleague and I were
+immediately pulled in by the gravity of the Stone–Weierstrass theorem in this
+setting, which, loosely speaking, says that any continuous function of a path
+can be approximated, to any desired accuracy, by a linear functional of the
+path's signature (finally, linear regression could be correct!).  That was enough to
+get us to start a working group around the topic.
+
+As we worked through the chapters, tensor products became a
+ubiquitous theme.  My own exposure to them had never gone past
+superficially identifying them with multidimensional arrays.  For
+practical purposes that picture had served me well enough, but it always left
+a hole that I understood neither the why nor the how.
+
+After several reading and discussion sessions, and with the help of an
+excellent note [@conrad_tensorprod], a couple of insights surfaced.
+Before getting to the *why*, though, let's start with a concrete
+view: how to construct a tensor product space.
+
+Consider two vector spaces $U, V$ over a field $F$.  We build $U \otimes V$ in
+three steps.
+
+#### Step 1 — A free vector space
+
+Construct a free vector space $\mathcal{F}(U \times V)$ which contains elements
+in the form of
+$$
+\sum_{i=1}^n c_i (u_i, v_i),
+$$
+where $c_i \in F$, $u_i \in U$, and $v_i \in V$.
+
+At this stage $\mathcal{F}(U \times V)$ is nothing more than the collection of
+finite sums of such pairs, scaled by scalars from $F$; we have imposed no
+structure on it yet.  In particular, we say nothing about how
+$c_1 (u_1 + u_2, v_1)$ relates to $(c_1 u_1, v_1) + (c_1 u_2, v_1)$, even if,
+having peeked ahead at what tensor products are, you are tempted to call them
+equal.
+
+#### Step 2 — The relations
+
+Construct the subspace $W$ spanned by all elements of the following forms
+(for all $u_1, u_2 \in U$, $v_1, v_2 \in V$, and $c \in F$):
+
+1. $(u_1 + u_2, v_1) - (u_1, v_1) - (u_2, v_1)$
+2. $(u_1, v_1 + v_2) - (u_1, v_1) - (u_1, v_2)$
+3. $c(u_1, v_1) - (c u_1, v_1)$
+4. $c(u_1, v_1) - (u_1, cv_1)$
+
+#### Step 3 — The quotient
+
+Take
+$$
+U \otimes V \vcentcolon = \mathcal{F}(U \times V) / W.
+$$
+
+In other words, elements in $U \otimes V$ are equivalence classes (cosets) of
+elements of $\mathcal{F}(U \times V)$.  The cosets $(u, v) + W$ are called
+the *pure* (or *simple*) tensors, which we denote
+$u \otimes v$.  A general element, however, need not be a single pure tensor.
+It is a finite sum
+$$
+\Big(\sum_{i=1}^n c_i (u_i, v_i)\Big) + W = \sum_{i=1}^n c_i \, (u_i \otimes v_i),
+$$
+and in general this sum does not necessarily collapse to one $u \otimes v$.
+
+Most texts on tensor products list the following properties as the most
+descriptive characteristics.  One can verify that they hold for $U \otimes V$:
+1. $(u_1 + u_2) \otimes v = u_1 \otimes v + u_2 \otimes v $, and
+2. $u \otimes (v_1 + v_2) = u \otimes v_1 + u \otimes v_2 $, and
+3. $c (u \otimes v) =  (cu) \otimes v = u \otimes (cv) $,
+
+where $u_1, u_2, u \in U$, $v_1, v_2, v \in V$, and $c \in F.$
+
+For example, let's check property 1.  By definition one has
+$$
+\begin{align*}
+& (u_1 + u_2) \otimes v \\
+= & (u_1 + u_2, v) + W \\
+= & (u_1 + u_2, v) - [(u_1 + u_2, v) - (u_1, v) - (u_2, v)] + W \\
+= & (u_1, v) + (u_2, v) + W \\
+= & u_1 \otimes v + u_2 \otimes v.
+\end{align*}
+$$
+
+This is no accident: by passing to the quotient $\mathcal{F}(U \times V) / W$
+we have declared every element of $W$ to be the zero element.
+
+I love this explicit construction because it lays the structure of
+$U \otimes V$ completely bare.  In comparison, the isomorphism $\mathbb{R}^2
+\otimes \mathbb{R}^2 \cong M_{2\times2}$ with the 2-by-2 matrices loses no
+information; what the matrix shorthand *hides* is that many
+different pairs $(u, v)$ collapse to the same tensor which is exactly what
+the equivalence-class structure that the quotient makes explicit.
+For instance, the following elements all represent the same member
+in $\mathbb{R}^2 \otimes \mathbb{R}^2$:
+
+$$
+\left(
+\begin{bmatrix}
+2\\
+0\\
+\end{bmatrix},
+\begin{bmatrix}
+0\\
+3\\
+\end{bmatrix}
+\right),
+6\left(
+\begin{bmatrix}
+1\\
+0\\
+\end{bmatrix},
+\begin{bmatrix}
+0\\
+1\\
+\end{bmatrix}
+\right),
+2\left(
+\begin{bmatrix}
+3\\
+0\\
+\end{bmatrix},
+\begin{bmatrix}
+0\\
+1\\
+\end{bmatrix}
+\right),
+3\left(
+\begin{bmatrix}
+1\\
+0\\
+\end{bmatrix},
+\begin{bmatrix}
+0\\
+2\\
+\end{bmatrix}
+\right).
+$$
+
+The more important question is *why* we go to all this trouble.  In short,
+$U \otimes V$ together with the map $T: U \times V \rightarrow U \otimes V$
+is the most general construction through which
+every bilinear map factors: for any bilinear $B: U \times V \rightarrow P$
+there is a unique linear map $L: U \otimes V \rightarrow P$ with
+$B = L \circ T.$
+
+My train arrived.  Let's leave the even more interesting discussion on the
+*why* part to the next post.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

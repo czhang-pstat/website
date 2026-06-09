@@ -5,6 +5,7 @@ import sitemap from '@astrojs/sitemap';
 import { defineConfig, fontProviders } from 'astro/config';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
+import rehypeCitation from 'rehype-citation';
 
 // https://astro.build/config
 export default defineConfig({
@@ -13,7 +14,17 @@ export default defineConfig({
 	integrations: [mdx(), sitemap()],
 	markdown: {
 		remarkPlugins: [remarkMath],
-		rehypePlugins: [rehypeKatex],
+		rehypePlugins: [
+			[
+				rehypeCitation,
+				{
+					bibliography: './src/content/blog/references.bib',
+					csl: 'apa',
+					linkCitations: true,
+				},
+			],
+			rehypeKatex,
+		],
 	},
 	fonts: [
 		{
