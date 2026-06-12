@@ -14,15 +14,14 @@ designs.
 
 #### One dataset, three answers
 
-Let's start with an experiment.  We have ten features, and the tenth is
-almost a duplicate of the ninth.  This situation could easily arise when
-dealing with data sets with many features.  In this experiment, we take
-the case to the extreme to make a point.  In the training data the two columns
-agree to about one part in $10^8$.  At
-test time the redundancy has drifted ever so slightly, to about one part in $10^5$.
-The data generating process itself is perfectly well behaved in
-the sense that the true $\beta$ and the noise are both at a moderate
-level.
+Let's start with an experiment.  Suppose we have ten features, and the tenth
+is almost a duplicate of the ninth.  This situation could easily arise when
+dealing with datasets with many features.  In this experiment, we take it
+to the extreme to make a point: in the training data the two columns
+agree to about one part in $10^8$.  At test time the similarity has drifted
+ever so slightly, to about one part in $10^5$. The data generating process
+itself is perfectly well behaved.  It is linear in the features with true
+coefficients $\beta$ and the noise are both at moderate levels.
 
 ```python
 import numpy as np
@@ -47,15 +46,14 @@ skl = LinearRegression(fit_intercept=False).fit(X_train, y_train)
 ols = sm.OLS(y_train, X_train).fit()
 ```
 
-We fit the same model in R, on the exact same data (exported to CSV with
-full floating point precision):
+We fit the same model in R on the exact same data with
 
 ```r
 fit <- lm(y ~ . - 1, data = train)
 ```
 
-Three implementations of the most classical model in statistics, one
-dataset.  Here is what comes back:
+Three implementations of the most classical (often misused) model in
+statistics, one dataset.  Here is what comes back:
 
 |              | in-sample $R^2$ | in-sample RMSE | out-of-sample RMSE |
 | ------------ | --------------- | -------------- | ------------------ |
@@ -70,26 +68,25 @@ statsmodels is off by two orders of magnitude:
 
 ![Predicted vs actual, in-sample and out-of-sample](../../assets/linreg/predictions.png)
 
-Now the coefficients, where things get even more interesting.
+Estimated coefficients get even more interesting.
 The ground truth is $(\beta_9, \beta_{10}) = (1.5, 0.5)$, and the three
 libraries return three incompatible stories:
 
-|              | $\beta_7$ | $\beta_8$ | $\beta_9$ | $\beta_{10}$ |
-| ------------ | --------- | --------- | --------- | ------------ |
-| Truth        | 0         | 3         | 1.5       | 0.5          |
-| R lm         | −0.013    | 3.011     | 1.925     | NA           |
-| scikit-learn | −0.013    | 3.011     | 0.962     | 0.962        |
-| statsmodels  | −0.016    | 3.016     | $+5.6 \times 10^6$ | $-5.6 \times 10^6$ |
+|              | $\beta_9$ | $\beta_{10}$ |
+| ------------ | --------- | ------------ |
+| Truth        | 1.5       | 0.5          |
+| R lm         | 1.925     | NA           |
+| scikit-learn | 0.962     | 0.962        |
+| statsmodels  | $+5.6 \times 10^6$ | $-5.6 \times 10^6$ |
 
 ![Coefficient comparison on a symlog scale](../../assets/linreg/coefficients.png)
 
-R refuses to estimate $\beta_{10}$ at all: it reports `NA`, prints
-`(1 not defined because of singularities)` in the summary, and produces a
+R refuses to estimate $\beta_{10}$ at all: it reports `NA` and produces a
 warning about a "rank-deficient fit" when you ask it to predict.
 scikit-learn quietly splits the signal evenly between the twin columns.
 statsmodels returns a gigantic pair of opposite-signed coefficients that
 cancel almost perfectly in sample.  However, the moment the twin columns
-disagree at the scale of $10^{-5}$ at test time, a coefficient of $5.6$
+disagree at the scale of $10^{-5}$ in the testing set, a coefficient of $5.6$
 million amplifies that disagreement into prediction errors of around
 $50$.
 
@@ -287,7 +284,8 @@ legitimate solutions for the original problem (1).
 
 #### What each library actually does
 
-Armed with the two approaches, we can now name exactly what each library
+Armed with the understanding of the two approaches, we can now name exactly
+what each library
 computed in the opening experiment.  The smallest singular value of our
 training matrix is $s_{min} \approx 9.3 \times 10^{-8}$; relative to the
 largest, $s_{min}/s_{max} \approx 4.4 \times 10^{-9}$.  The relative size
@@ -311,7 +309,7 @@ ratio: *is that zero?*
   the shared signal evenly between the twin columns, resulting in the values $(0.962, 0.962)$.
 - **R's `lm`** implements Approach 2: Householder QR with column pivoting
   (LINPACK's `dqrdc2`), with default
-  `tol = 1e-7`.  R never looks at singular values; instead, a
+  `tol = 1e-7`.  R never looks at singular values, instead, a
   column is pivoted out when its residual norm falls below `tol` times
   its original norm.  For our matrix, column 10 retains only
   $\sim 10^{-8}$ of its norm once column 9 is processed, so it is pivoted
@@ -363,8 +361,8 @@ Acting on that is your job.
 
 **R** comes from the same statistical tradition but makes the pragmatic
 move. It detects the rank deficiency, removes it, and screams about it in
-multiple places: the `NA` in the coefficient table and the rank-deficiency warning at
-prediction time.  An `NA` is basically saying:
+coefficient table by producing `NA` and the rank-deficiency warning at
+prediction time.  An `NA` is basically saying
 "this coefficient cannot be determined reliably from these data."
 
 **scikit-learn** is a prediction machine.  Its goal is to return a
