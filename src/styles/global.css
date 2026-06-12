@@ -86,6 +86,16 @@ input {
 table {
 	width: 100%;
 }
+/* Wide tables, code blocks, and display math scroll horizontally
+   instead of stretching the page on small screens. */
+pre {
+	overflow-x: auto;
+}
+.katex-display {
+	overflow-x: auto;
+	overflow-y: hidden;
+	padding: 0.25em 0;
+}
 img {
 	max-width: 100%;
 	height: auto;
@@ -99,6 +109,7 @@ code {
 pre {
 	padding: 1.5em;
 	border-radius: 8px;
+	font-size: 0.8em;
 }
 pre > code {
 	all: unset;
@@ -118,7 +129,33 @@ hr {
 		font-size: 18px;
 	}
 	main {
+		padding: 1.5em 1em;
+	}
+	h1 {
+		font-size: 2em;
+	}
+	h2 {
+		font-size: 1.7em;
+	}
+	h3 {
+		font-size: 1.45em;
+	}
+	h4 {
+		font-size: 1.25em;
+	}
+	blockquote {
+		font-size: 1.1em;
+		padding-left: 14px;
+	}
+	pre {
 		padding: 1em;
+		font-size: 0.75em;
+	}
+	table {
+		display: block;
+		overflow-x: auto;
+		-webkit-overflow-scrolling: touch;
+		font-size: 0.9em;
 	}
 }
 

@@ -44,4 +44,19 @@ import HeaderLink from './HeaderLink.astro';
 		text-decoration: none;
 		border-bottom-color: var(--accent);
 	}
+	@media (max-width: 720px) {
+		header {
+			padding: 0 0.5em;
+		}
+		nav {
+			flex-wrap: wrap;
+		}
+		nav a {
+			padding: 0.8em 0.4em;
+			font-size: 0.95em;
+		}
+		h2 {
+			font-size: 0.95em;
+		}
+	}
 </style>
