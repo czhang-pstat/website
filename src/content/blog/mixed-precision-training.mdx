@@ -1,0 +1,262 @@
+---
+title: 'A look at mixed-precision training'
+description: 'The same matrix multiply computed four ways, and what a single accumulator bit-width costs in speed and in error'
+pubDate: 'Jul 01 2026'
+# heroImage: '../../assets/your-image.jpg'   # optional — uncomment and point to a file in src/assets/
+---
+
+Almost everything I have been focusing on neural networks
+lives on the mathematical side, mostly the (lack of) learning theory.
+The hardware was a black box that turned `loss.backward()` into numbers.
+It was not for lack of interest.  I think I just let the phrase
+"parallel computing" do all the work, as if multiplying matrices on ten
+thousand cores were something that happens naturally rather than
+something people had to build.
+
+Recently that changed.  The more I read about how these models are
+*actually* trained at scale, the more the engineering looks like its own
+kind of marvel, and nothing captures it better than **mixed-precision
+training (mpt)** [@micikevicius2018mixed].  The premise is almost impudently
+romantic.  Do the arithmetic of a billion-parameter model at half the usual
+precision, get it roughly twice as fast on half the memory, and somehow
+still converge to the same place.  The idea earned dedicated silicon in
+2017, the *Tensor Cores* that now ship with every NVIDIA GPU, and has since
+pushed past FP16 to FP8, with FP4 on the research frontier.  Naturally, I
+had to write some small CUDA kernels and watch it work :)
+
+The experiment is one operation computed four ways.  Matrix multiplications
+in the form of $C = AB$ are the atoms of a network's forward and backward pass,
+so we will race these building blocks.
+
+- **Path A** runs on Tensor Cores with FP16 inputs and **FP16** accumulation, the naive half-precision version.
+- **Path B** runs on Tensor Cores with FP16 inputs and **FP32** accumulation, mixed precision as recommended.
+- **Path C** runs on ordinary CUDA cores in FP32 throughout, the full-precision baseline.
+- **Path D** calls cuBLAS with FP16 inputs and FP32 accumulation, NVIDIA's hand-tuned kernel.
+
+Everything is checked against an FP64 reference on the host.  I want to
+answer two questions.  How much speed does the dedicated hardware buy, and
+what does it cost?
+
+#### My machine
+
+All of this runs on my laptop, an ASUS ROG Zephyrus G16 (GA605, model year 2024),
+which is worth introducing because two of its numbers will matter later.  The GPU
+is an RTX 4070 Laptop GPU on the Ada architecture,
+with 36 streaming multiprocessors and 8 GB of GDDR6.  Being the mobile
+variant, its total graphics power is capped at 105 W, an 85 W base plus
+20 W of Dynamic Boost, roughly half of the 200 W its desktop big brother
+enjoys.  That cap turns out to shape the results as much as the silicon
+does.  The host is an AMD Ryzen AI 9 HX 370 with 12 Zen 5 cores and 32 GB
+of RAM.  AMD rates the chip at a 28 W default TDP, though this chassis
+sustains it at roughly 65 to 80 W under full load.  The software stack
+is Ubuntu 26.04 LTS, CUDA toolkit 13.3, and NVIDIA driver 610.43.
+
+A brief word on measurement.  Each kernel is timed with CUDA events,
+timestamps the GPU records in its own command stream, so the numbers
+reflect actual GPU execution rather than host-side noise; every figure is
+the average of ten launches after three untimed warmups.  Clock speed,
+power draw, and temperature are sampled every 100 ms with `nvidia-smi`,
+which reads the card's on-board telemetry, running in the background while
+the benchmarks run.
+
+#### Throughput is what we are watching
+
+To keep the comparison fair I fix the shape to square matrices with
+$M = N = K$ and vary only the scale.  Here are all four paths, in TFLOP/s.
+
+| $M = N = K$ | A: FP16 acc | B: FP32 acc | C: FP32 cores | D: cuBLAS |
+| ----------: | ----------: | ----------: | ------------: | --------: |
+| $512$       | 5.6         | 5.7         | 1.1           | 16.6      |
+| $1024$      | 6.0         | 6.0         | 1.2           | 21.4      |
+| $2048$      | 6.8         | 6.8         | 1.3           | 39.3      |
+| $4096$      | **7.1**     | **7.6**     | 1.1           | **42.4**  |
+| $8192$      | 5.6         | 4.3         | 1.1           | 26.3      |
+
+The table reads best one column at a time, because each path is fighting
+a different limit.  Once each column makes sense on its own, the
+comparisons across them fall out almost for free.
+
+**Path C is flat because it fights only itself.**  The FP32 baseline posts
+1.1 TFLOP/s at every size.  It is a same-effort naive kernel, its
+bottleneck is its own memory traffic, and that bottleneck does not care
+how big the problem is.  Its job in the table is to set the floor.
+
+**Paths A and B are pinned to the memory wall.**  A GPU has two speeds,
+how fast it computes and how fast it reads memory, and on this card they
+are about 95 TFLOP/s against 256 GB/s.  Keeping the Tensor Cores fed
+therefore requires roughly 370 FLOPs of work per byte fetched.  My naive
+kernel offers 8 FLOPs/byte.  Each warp fetches two fresh $16\times16$ FP16 tiles
+(1024 bytes) from global memory for every multiply & accumulate step
+(8192 FLOPs) with no cache or reuse of the fetched data.  The computing units
+spend most of their time waiting.  More importantly, simple calculation can verify
+that the 8 FLOPs/bype of this naive kernel does not
+grow with the size of matrix dimensions MNK, it is a scheduling problem not a size
+problem.  That one fact explains the whole trend of both columns, that is,
+the level is low and the climb from 5.6 TFLOP/s to 7.6 TFLOP/s is mild.  The memory
+ceiling caused by scheduling does not grow with problem size.  In addition,
+one can observe that the two columns tie at every size, even though on consumer Ada GPUs
+FP16 accumulation has *twice* the theoretical compute throughput of FP32
+accumulation.  That 2x is a gap between two ceilings, roughly 190 against
+95 TFLOP/s, and my kernel idles at 7 while its Tensor Cores wait on
+memory.  Doubling a ceiling you never touch changes nothing, so the 2x
+simply disappears.
+
+**Path D is the only column that shows the machine itself.**  cuBLAS is
+tuned hard enough that its limits are the hardware's, which is why its
+column is the only one with real dynamic range.  At $512^3$ it posts
+16.6 TFLOP/s not because it is slow but because it is underemployed.  A
+$512\times512$ output cuts into too few independent tiles of work for
+36 SMs (in my kernel's terms, $32\times32 = 1024$ warp tiles, less than
+one full wave for the machine), and the whole multiplication is over in about
+50 microseconds, before the GPU even ramps its clocks up from idle.  As
+the problem grows, the machine fills, the clock boosts to about 2565 MHz,
+the card pulls its full 105 W, which delivers an formidable **42.4 TFLOP/s**
+(considering a power capped mobile card).
+
+**The last row hurts everyone.**  At $8192^3$ every path regresses; cuBLAS
+drops from 42.4 to 26.3 and my path B from 7.6 to 4.3.  Each $8192^2$ FP32
+matrix is 268 MB, so the working tiles no longer fit in cache, traffic
+spills to DRAM, and the sustained full-power run throttles the clock a bit
+further.  The knee at $4096^3$ is where the problem is big enough to
+saturate the SMs but still small enough to live in cache.  Note that Path A's clear
+win over Path B in this row, 5.6 vs 4.3, comes from its FP16 output being half the
+bytes.  It is a memory saving, not a compute win.
+
+Now put the columns side by side at the sweet spot of $4096^3$.  Even my
+clumsy one-tile-per-warp kernel (Path A and B) beats the same-effort Path C FP32 baseline
+**7x**.  That is the marvel in one line.  A chunk of the die is given over
+to small FP16 multiplies, and it repays its transistors many times over.
+cuBLAS beats the baseline roughly **38x**, and its 6x lead over my kernel is pure
+software.  Shared-memory tiling, register blocking, and scheduling let it
+do hundreds of FLOPs with each fetched byte before letting it go, hoisting
+it off the memory wall that pins me.  Same silicon, same instruction.
+"Using the hardware" and "using the hardware well" are different
+achievements.  And FP16 accumulation buys essentially no speed anywhere in
+the table.  Which sharpens the next question.  If it is not even faster,
+what does it cost?
+
+#### The price is precision
+
+A matrix multiply is built from dot products of length $K$, the shared
+inner dimension of $A_{M\times K}$ and $B_{K\times N}$, so $K$ counts how
+many terms we accumulate.  Fix $M = N = 512$, sweep $K$, and watch the
+relative error $\|\hat C - C\|_F / \|C\|_F$ against the FP64 reference.
+
+|   $K$ | A: FP16 acc | B: FP32 acc | C: FP32 cores | D: cuBLAS |
+| ----: | ----------- | ----------- | ------------- | --------- |
+|   256 | 8.9e-04     | 2.9e-04     | 2.9e-07       | 2.9e-04   |
+|   512 | 1.2e-03     | 2.9e-04     | 4.1e-07       | 2.9e-04   |
+|  1024 | 1.7e-03     | 3.0e-04     | 5.7e-07       | 3.0e-04   |
+|  2048 | 2.4e-03     | 2.9e-04     | 8.1e-07       | 2.9e-04   |
+|  4096 | 3.3e-03     | 2.9e-04     | 1.1e-06       | 2.9e-04   |
+|  8192 | **4.7e-03** | **2.9e-04** | 1.6e-06       | 2.9e-04   |
+
+Path B sits flat at $2.9\times10^{-4}$ no matter what.  Path A starts worse
+and *keeps worsening*, reaching a 16x gap by $K = 8192$.  Path C is three
+orders of magnitude below both.  Path D matches path B to every digit the
+program prints, a clue we will come back to.  One idea from floating-point
+arithmetic explains the rest.
+
+A float's mantissa sets its *relative* resolution.  FP16 carries 11
+significant bits (10 stored plus one implicit), so near a number of
+magnitude $s$ the representable values are spaced about $2^{-10}|s|$
+apart, a gap known as the machine epsilon.  Rounding to the nearest
+representable value therefore misses by at most half that gap, and this
+half, the *unit roundoff*
+$$
+u_{16} = 2^{-11} \approx 4.9 \times 10^{-4},
+$$
+is the relative error a single FP16 operation can inject.  FP32's
+counterpart is $u_{32} = 2^{-24} \approx 6.0 \times 10^{-8}$.  A dot
+product is a running sum, $s_k = s_{k-1} + a_k b_k$, and every addition
+rounds to the nearest representable number, injecting relative error up to
+$u$.  The products carry random signs, so the errors random-walk and grow
+like
+$$
+\text{error} \;\sim\; \sqrt{K}\,u .
+$$
+The failure mode even has a name, *swamping*.  Once the partial sum $s$ is
+large and the next term is small enough that $|a_k b_k| < u\,|s|$, half
+the local spacing, the addition rounds straight back to $s$ and the term
+vanishes without a trace.  A long FP16 sum quietly stops accumulating.
+
+That model explains the whole table.
+
+- **B is flat because its error is floored by the inputs, not the sum.**
+  Rounding the entries of $A$ and $B$ to FP16 injects a fixed error of
+  order $u_{16}$.  With the accumulation kept in FP32, that floor
+  of $2.9\times10^{-4}$ is the entire error, at $K = 256$ or $8192$ alike.
+- **A grows because it stacks $\sqrt K\,u_{16}$ on top of the
+  floor.**  Check the exponent.  $K$ grows 32x across the table,
+  $\sqrt{32}\approx 5.7$, and the measured error grows 5.3x, tracking the
+  random walk almost row for row.
+- **C is the same story with $u_{32}$ up front**, an error near
+  $10^{-6}$ that barely stirs.
+
+So "accumulate in FP32" is not numerical fussiness.  It is the difference
+between an error *bounded by your inputs* and one that *degrades with the
+depth of your linear algebra*.  And in a real model $K$ is a layer width or
+a sequence length, routinely in the thousands.
+
+#### One template parameter
+
+The accumulator precision is a native mode of the Tensor Core, not a
+software workaround.  That is the point of this section, and it is why
+paths A and B are the same kernel differing in a single template
+parameter.
+
+```cpp
+template <typename AccT>
+__global__ void wmmaGemm(const half *A, const half *B, AccT *C, int M, int N, int K) {
+  wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> aFrag;
+  wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> bFrag;
+  wmma::fragment<wmma::accumulator, 16, 16, 16, AccT> acc;   // <- the only difference
+  wmma::fill_fragment(acc, static_cast<AccT>(0.0f));
+  // ...
+  for (int k = 0; k < K; k += 16) {
+    wmma::load_matrix_sync(aFrag, /* tile of A */);
+    wmma::load_matrix_sync(bFrag, /* tile of B */);
+    wmma::mma_sync(acc, aFrag, bFrag, acc);   // acc = aFrag * bFrag + acc, summed in AccT
+  }
+  // ...
+}
+```
+
+The Tensor Core primitive works one level below our problem $C = AB$.
+Writing lowercase for $16\times16$ tiles, a single warp-level instruction
+computes the fused multiply-accumulate
+$$
+d \;=\; a\,b + c ,
+$$
+where $a$ and $b$ are FP16 tiles and $c$ is the running sum, which is how
+the loop above folds the whole shared dimension into one accumulator.  The
+instruction fixes the input type at FP16 but lets the accumulator be FP16
+or FP32, and since the accumulator lives in registers, the choice changes
+nothing about the bytes fetched or the multiplies performed.  Path A and
+path B therefore do identical work on identical data and differ only in
+where the sum is kept, which is precisely the comparison the two error
+columns measured.  It also explains a detail in the data.  cuBLAS and my
+path B produce bit-identical error columns, because both are running the
+same instruction in the same mode, and all of NVIDIA's tuning shows up in
+the throughput table instead.
+
+#### But why is any of this allowed?
+
+Step back and notice something uncomfortable.  Even path B, the *good* one,
+is wrong by $2.9\times10^{-4}$.  We round every input to three or four
+significant figures before multiplying, on the central operation of a model
+with billions of parameters, millions of times per training step.  Yet the
+trained model reaches the same validation accuracy as its FP32-trained
+twin, with matching learning curves along the way; that is the central
+experimental result of the mixed-precision paper.  In most of numerical
+computing, throwing away four digits of your inputs to go faster would be
+malpractice; you would never solve an ill-conditioned linear system that
+way.
+
+So why is a neural network so forgiving of noise that would wreck a careful
+numerical algorithm, noise we not only tolerate but engineer whole chips to
+inject?  That question lands squarely back on the
+learning-theory side of things.  Something about how these models are
+trained, and about the geometry of the functions they represent, makes them
+robust to exactly this kind of perturbation.  That is the story for next
+time.
